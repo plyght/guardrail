@@ -1,79 +1,73 @@
 # guardrail (`gr`)
 
-A fast, independent version control system built for humans and agents — not a git wrapper, not git-backed. guardrail has its own content-addressed store, but interoperates with git so you can adopt it gradually and keep pushing to GitHub.
+A fast, independent version control system. Content-addressed storage with sub-file dedup, whole-repo undo, and instant copy-on-write worktrees. It runs beside git and pushes to GitHub, so you can adopt it gradually without giving anything up.
 
 ## Why
 
-git is superb at what it was built for. But today we work on big Rust/TS repos and with coding agents, and a lot of git's model is friction: the staging area, stashing to switch branches, scary resets, whole-file LFS for binaries, and heavyweight worktrees. guardrail rethinks the everyday loop while keeping git as a first-class peer.
+git is excellent, but much of its friction is incidental: a staging area to manage, stashing just to switch branches, resets that feel dangerous, whole-file handling for binaries, and heavyweight worktrees. guardrail keeps a familiar flow and removes that friction while staying compatible with the git world you already use.
 
-## Ideas
+## Features
 
-- **Content-addressed store** with FastCDC chunking — large binaries and assets are first-class and deduped at the chunk level, no LFS.
-- **Working copy is always a change** — no staging, no stash. You just edit and `gr save`.
-- **Operation log** — `gr undo`/`gr redo` is whole-repo and never scary.
-- **Instant copy-on-write worktrees** (`gr work`) — great for agents, near-zero disk.
-- **Bidirectional git interop** — import/export/clone/push/pull; gr and git coexist in the same repo.
-- **Sparse/lazy transfer** — pull just the paths you need; a peer is just an object store, no forced central server.
-
-## The everyday loop
-
-```
-gr init
-gr save -m "message"      # checkpoint the whole working tree (no add/stash)
-gr status | gr diff | gr log
-gr desc -m "rename it"
-```
-
-## Moving around
-
-```
-gr new feature            # branch + switch
-gr switch main            # auto-saves your work first
-gr work ../agent-copy     # instant copy-on-write worktree
-gr undo   /  gr redo
-gr restore <file>         # discard edits to one file
-gr merge <branch>         # three-way merge with conflict markers
-```
+| Feature | What it gives you |
+| --- | --- |
+| Content-addressed store (BLAKE3 + FastCDC) | Large files and binaries are first-class, deduped at the chunk level. No LFS. |
+| Working copy is always a change | No staging, no stash. Edit, then `gr save`. |
+| Operation log | `gr undo` and `gr redo` across the whole repo. Nothing gets lost. |
+| Instant copy-on-write worktrees | `gr work <dir>` spins up a workspace in milliseconds (APFS clonefile, Linux reflink). |
+| Three-way merge | Branch merges with conflict markers. Non-overlapping edits merge cleanly. |
+| Prompt provenance (opt-in) | Record which agent or prompt produced a change, stored in the repo. |
+| Bidirectional git interop | Import and export full history, branches, and tags. Push and pull to GitHub. |
+| Sparse fetch and serve | Pull only the paths you need. A peer is just an object store, no forced server. |
 
 ## Git, side by side
 
+guardrail does not replace git or GitHub, and adopting it is reversible. It sits next to your `.git`, and you decide how far to lean in:
+
+- Keep committing and pushing with git as usual. guardrail imports and exports full history losslessly, so you are never locked in.
+- Or enable dual-write (`gr config --global sync.git true`) and every `gr save` also lands a normal git commit, so your team, GitHub, and CI keep working while you drive with gr.
+- Run `gr export <dir>` to materialize a plain git repo at any time.
+
+If gr turns out not to be for you, your git history is right there, untouched.
+
+## Quick start
+
 ```
-gr import <git-repo>      # pull git HEAD into guardrail
-gr export <git-repo>      # write guardrail HEAD out as git commits
+gr init
+gr save -m "message"      # snapshot the working tree (no add, no stash)
+gr status | gr diff | gr log
+gr new feature            # branch and switch
+gr work ../agent-copy     # instant worktree
+gr undo   /   gr redo
+```
+
+Working with git:
+
+```
 gr clone <git-url> <dir>
-gr push <url> [branch]    # e.g. push to your GitHub master
-gr pull <url>
+gr import <git-repo>   /   gr export <git-repo>
+gr push [remote] [branch]     # uses your existing git credentials
 ```
 
-## Config
+## Install
+
+Grab a binary from [Releases](https://github.com/plyght/guardrail/releases), or update in place:
 
 ```
-gr config user.name "You"                 # local (.gr/config)
-gr config --global user.email you@x.com    # global (~/.config/gr/config)
-gr config --global init.defaultBranch main
+gr update             # latest stable
+gr update --nightly   # latest nightly build
 ```
 
-Identity precedence: `GR_AUTHOR` env → local config → global config.
+Binaries are statically linked, so no system libgit2 is required.
 
-## Experimental
+## Build from source
 
-```
-gr serve [port]           # share objects over TCP
-gr fetch <src> [prefix]   # sparse-pull a branch (optionally just some paths)
-gr watch                  # auto-save on every file change
-```
-
-## Build
-
-Requires Zig 0.16 and libgit2.
+Requires Zig 0.16.
 
 ```
-zig build          # produces zig-out/bin/gr
-zig build test     # run the test suite
+zig build           # produces zig-out/bin/gr
+zig build test
 ```
 
-Status: early, opinionated, and moving fast.
+## Status
 
-## Releases
-
-Prebuilt `gr` binaries are published to GitHub Releases for each platform (macOS arm64/x64, Linux x64/arm64); they dynamically link libgit2, so you need `libgit2` installed to run them.
+Early and opinionated. Interfaces may still change.
