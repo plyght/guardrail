@@ -38,6 +38,127 @@ fn envToken() ?[*:0]const u8 {
     return null;
 }
 
+extern "c" fn fork() std.c.pid_t;
+extern "c" fn close(fd: std.c.fd_t) c_int;
+extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
+
+const Cred = struct {
+    user: [:0]u8,
+    pass: [:0]u8,
+
+    fn free(self: Cred) void {
+        std.heap.c_allocator.free(self.user);
+        std.heap.c_allocator.free(self.pass);
+    }
+};
+
+var g_helper: ?Cred = null;
+var g_helper_tried: bool = false;
+
+fn resetCredCache() void {
+    if (g_helper) |hc| hc.free();
+    g_helper = null;
+    g_helper_tried = false;
+}
+
+/// Parse `git credential fill` stdout (lines like `username=..`, `password=..`,
+/// blank-line terminated) into user/pass spans of `data`. Returns null unless
+/// BOTH username and password are present.
+fn parseCredentialOutput(data: []const u8) ?struct { user: []const u8, pass: []const u8 } {
+    var user: ?[]const u8 = null;
+    var pass: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (line.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = line[0..eq];
+        const val = line[eq + 1 ..];
+        if (std.mem.eql(u8, key, "username")) {
+            user = val;
+        } else if (std.mem.eql(u8, key, "password")) {
+            pass = val;
+        }
+    }
+    if (user == null or pass == null) return null;
+    return .{ .user = user.?, .pass = pass.? };
+}
+
+/// Query git's configured credential helper (e.g. osxkeychain) by running
+/// `git credential fill`, feeding `url=<url>\n\n` on stdin and parsing the
+/// answer from stdout. Uses a real pipe/fork/exec (no shell) so the external
+/// url cannot be interpreted by a shell. Returns heap-allocated null-terminated
+/// user/pass on success.
+fn credentialFromHelper(url: []const u8) ?Cred {
+    const a = std.heap.c_allocator;
+
+    var in_pipe: [2]std.c.fd_t = undefined;
+    var out_pipe: [2]std.c.fd_t = undefined;
+    if (std.c.pipe(&in_pipe) != 0) return null;
+    if (std.c.pipe(&out_pipe) != 0) {
+        _ = close(in_pipe[0]);
+        _ = close(in_pipe[1]);
+        return null;
+    }
+
+    const pid = fork();
+    if (pid < 0) {
+        _ = close(in_pipe[0]);
+        _ = close(in_pipe[1]);
+        _ = close(out_pipe[0]);
+        _ = close(out_pipe[1]);
+        return null;
+    }
+    if (pid == 0) {
+        _ = std.c.dup2(in_pipe[0], 0);
+        _ = std.c.dup2(out_pipe[1], 1);
+        _ = close(in_pipe[0]);
+        _ = close(in_pipe[1]);
+        _ = close(out_pipe[0]);
+        _ = close(out_pipe[1]);
+        const argv = [_:null]?[*:0]const u8{ "git", "credential", "fill" };
+        _ = execvp("git", &argv);
+        std.c._exit(127);
+    }
+
+    _ = close(in_pipe[0]);
+    _ = close(out_pipe[1]);
+
+    const req = std.fmt.allocPrint(a, "url={s}\n\n", .{url}) catch {
+        _ = close(in_pipe[1]);
+        _ = close(out_pipe[0]);
+        _ = std.c.waitpid(pid, null, 0);
+        return null;
+    };
+    defer a.free(req);
+    var written: usize = 0;
+    while (written < req.len) {
+        const n = std.c.write(in_pipe[1], req.ptr + written, req.len - written);
+        if (n <= 0) break;
+        written += @intCast(n);
+    }
+    _ = close(in_pipe[1]);
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+    var tmp: [4096]u8 = undefined;
+    while (true) {
+        const n = std.c.read(out_pipe[0], &tmp, tmp.len);
+        if (n <= 0) break;
+        buf.appendSlice(a, tmp[0..@intCast(n)]) catch break;
+    }
+    _ = close(out_pipe[0]);
+    _ = std.c.waitpid(pid, null, 0);
+
+    const parsed = parseCredentialOutput(buf.items) orelse return null;
+    const user = a.dupeZ(u8, parsed.user) catch return null;
+    const pass = a.dupeZ(u8, parsed.pass) catch {
+        a.free(user);
+        return null;
+    };
+    return .{ .user = user, .pass = pass };
+}
+
 fn credentialsCb(
     out: [*c]?*c.git_credential,
     url: [*c]const u8,
@@ -45,11 +166,19 @@ fn credentialsCb(
     allowed_types: c_uint,
     payload: ?*anyopaque,
 ) callconv(.c) c_int {
-    _ = url;
     _ = payload;
     if ((allowed_types & @as(c_uint, c.GIT_CREDENTIAL_USERPASS_PLAINTEXT)) != 0) {
         if (g_cred.token) |tok| {
             return c.git_credential_userpass_plaintext_new(out, tok, "x-oauth-basic");
+        }
+        if (!g_helper_tried) {
+            g_helper_tried = true;
+            if (url != null) {
+                g_helper = credentialFromHelper(std.mem.span(url));
+            }
+        }
+        if (g_helper) |hc| {
+            return c.git_credential_userpass_plaintext_new(out, hc.user.ptr, hc.pass.ptr);
         }
     }
     if ((allowed_types & @as(c_uint, c.GIT_CREDENTIAL_SSH_KEY)) != 0) {
@@ -946,6 +1075,7 @@ pub fn pushRemote(store: *Store, remote_url: []const u8, branch_opt: ?[]const u8
     try check(c.git_remote_create_anonymous(&remote, repo, url_z.ptr));
     defer c.git_remote_free(remote);
 
+    resetCredCache();
     g_cred.token = envToken();
 
     // Fetch-first: pull the remote branch (if it exists) into the mirror so that
@@ -1006,6 +1136,7 @@ pub fn pullRemote(store: *Store, remote_url: []const u8) !void {
     var rs_arr = [_][*c]u8{rs.ptr};
     var strarr = c.git_strarray{ .strings = &rs_arr, .count = 1 };
 
+    resetCredCache();
     g_cred.token = envToken();
     var opts: c.git_fetch_options = undefined;
     try check(c.git_fetch_options_init(&opts, c.GIT_FETCH_OPTIONS_VERSION));
@@ -1066,6 +1197,18 @@ fn resetIndexToHead(store: *Store, work_dir_path: []const u8) !void {
 // --- tests ---
 
 const testing = std.testing;
+
+test "parseCredentialOutput parses username and password" {
+    const blob = "protocol=https\nhost=github.com\nusername=x-access-token\npassword=ghp_abc123\n\n";
+    const got = parseCredentialOutput(blob) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("x-access-token", got.user);
+    try testing.expectEqualStrings("ghp_abc123", got.pass);
+}
+
+test "parseCredentialOutput returns null when password missing" {
+    const blob = "protocol=https\nhost=github.com\nusername=x-access-token\n\n";
+    try testing.expect(parseCredentialOutput(blob) == null);
+}
 
 test "importHead from a libgit2-created repo" {
     ensureInit();
