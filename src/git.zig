@@ -1039,6 +1039,28 @@ pub fn pullHead(store: *Store, target: []const u8) !void {
 /// there reflects guardrail's current change ("gr and git coexist live").
 pub fn syncColocated(store: *Store, work_dir_path: []const u8) !void {
     try exportHead(store, work_dir_path);
+    // gr wrote the commit straight to the branch ref, which leaves git's index
+    // stale relative to the new HEAD (so `git status`/`git diff` show garbage).
+    // Reset the index (MIXED: HEAD + index, working tree untouched) so git stays
+    // consistent and `git status` shows exactly what changed since the gr save.
+    resetIndexToHead(store, work_dir_path) catch {};
+}
+
+fn resetIndexToHead(store: *Store, work_dir_path: []const u8) !void {
+    ensureInit();
+    const alloc = store.alloc;
+    const path_z = try alloc.dupeZ(u8, work_dir_path);
+    defer alloc.free(path_z);
+
+    var repo: ?*c.git_repository = null;
+    if (c.git_repository_open(&repo, path_z.ptr) != 0) return;
+    defer c.git_repository_free(repo);
+
+    var head: ?*c.git_object = null;
+    if (c.git_revparse_single(&head, repo, "HEAD") != 0) return;
+    defer c.git_object_free(head);
+
+    _ = c.git_reset(repo, head, c.GIT_RESET_MIXED, null);
 }
 
 // --- tests ---

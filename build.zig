@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    linkLibgit2(exe_mod);
+    linkLibgit2(b, exe_mod, target, optimize);
     const exe = b.addExecutable(.{ .name = "gr", .root_module = exe_mod });
     b.installArtifact(exe);
 
@@ -28,18 +28,24 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
         .link_libc = true,
     });
-    linkLibgit2(test_mod);
+    linkLibgit2(b, test_mod, target, .Debug);
     const tests = b.addTest(.{ .root_module = test_mod });
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 }
 
-fn linkLibgit2(m: *std.Build.Module) void {
-    // Homebrew locations (Apple Silicon + Intel).
-    m.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
-    m.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
-    m.addIncludePath(.{ .cwd_relative = "/usr/local/include" });
-    m.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
-    m.linkSystemLibrary("git2", .{});
+fn linkLibgit2(
+    b: *std.Build,
+    m: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
+    // Build libgit2 (and its bundled deps) from source and statically link it,
+    // so the released binary carries no runtime dependency on libgit2.
+    const libgit2 = b.dependency("libgit2", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    m.linkLibrary(libgit2.artifact("git2"));
 }

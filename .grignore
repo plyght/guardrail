@@ -5,3 +5,4 @@ zig-cache/
 .DS_Store
 *.swp
 *~
+zig-pkg/
