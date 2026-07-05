@@ -14,6 +14,8 @@ const watch = @import("watch.zig");
 const net = @import("net.zig");
 const ignore = @import("ignore.zig");
 const provenance = @import("provenance.zig");
+const attribution = @import("attribution.zig");
+const agentscan = @import("agentscan.zig");
 const update = @import("update.zig");
 
 const Oid = oid.Oid;
@@ -42,6 +44,7 @@ const usage =
     \\  restore <file>  discard local edits to one file (from last save)
     \\  merge <branch>  merge another branch into the current one
     \\  provenance      show which agent/prompt produced each change (opt-in)
+    \\  why <file>      who last authored a file — human or which agent
     \\
     \\undo is never scary
     \\  undo            revert the last change-making operation (whole repo)
@@ -150,7 +153,9 @@ pub fn main(init: std.process.Init) !void {
         try cmdClone(io, alloc, w, rest);
     } else if (eq(cmd, "config")) {
         try cmdConfig(io, alloc, w, rest);
-    } else if (eq(cmd, "provenance") or eq(cmd, "why")) {
+    } else if (eq(cmd, "why")) {
+        try cmdWhy(io, alloc, w, rest);
+    } else if (eq(cmd, "provenance")) {
         try cmdProvenance(io, alloc, w);
     } else {
         try w.print("unknown command: {s}\n\n", .{cmd});
@@ -255,6 +260,30 @@ fn cmdProvenance(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer) !void 
     }
 }
 
+fn cmdWhy(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, rest: []const []const u8) !void {
+    if (rest.len < 1) {
+        try w.writeAll("usage: gr why <file>\n");
+        return;
+    }
+    var s = (try openRepo(io, alloc, w)) orelse return;
+    defer s.deinit();
+    const path = rest[0];
+    const maybe = attribution.lastForPath(&s, alloc, path) catch null;
+    const e = maybe orelse {
+        try w.print("{s}\n  \u{21b3} no attribution yet (save it, or it predates auto-provenance)\n", .{path});
+        return;
+    };
+    defer attribution.freeEntry(alloc, e);
+    switch (e.kind) {
+        .human => try w.print("{s}\n  \u{21b3} human\n", .{path}),
+        .agent => {
+            try w.print("{s}\n  \u{21b3} {s} ({s})\n", .{ path, e.agent, @tagName(e.confidence) });
+            if (e.session.len != 0) try w.print("  \u{21b3} session: {s}\n", .{e.session});
+            if (e.prompt.len != 0) try w.print("  \u{21b3} prompt: {s}\n", .{e.prompt});
+        },
+    }
+}
+
 fn cmdConfig(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, rest: []const []const u8) !void {
     var global = false;
     var pos: [2][]const u8 = undefined;
@@ -315,8 +344,16 @@ fn doSave(io: std.Io, alloc: std.mem.Allocator, s: *Store, message: []const u8) 
     defer alloc.free(author);
     var work = try openWork(io);
     defer work.close(io);
+    // Capture what changed BEFORE the snapshot (afterwards the tree is clean), so
+    // passive attribution can match each file against agent session logs.
+    const changed = workspace.status(s, work, alloc) catch null;
+    defer if (changed) |c| {
+        for (c) |e| alloc.free(e.path);
+        alloc.free(c);
+    };
     const change = try workspace.snapshot(s, work, author, message, nowSeconds(io));
     try oplog.record(s, .{ .kind = .snapshot, .branch = branch, .prev = prev, .new = change, .timestamp = nowSeconds(io) });
+    attribution.autoAttribute(s, work, change, changed orelse &.{});
     maybeSyncGit(io, alloc, s);
     return change;
 }
@@ -897,5 +934,7 @@ test {
     _ = net;
     _ = ignore;
     _ = provenance;
+    _ = attribution;
+    _ = agentscan;
     _ = update;
 }
