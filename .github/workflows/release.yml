@@ -205,30 +205,34 @@ jobs:
           - runner: macos-latest
             asset: gr-macos-arm64
             os: macos
+            zig: aarch64-macos
           - runner: macos-13
             asset: gr-macos-x64
             os: macos
+            zig: x86_64-macos
           - runner: ubuntu-latest
             asset: gr-linux-x64
             os: linux
+            zig: x86_64-linux
           - runner: ubuntu-24.04-arm
             asset: gr-linux-arm64
             os: linux
+            zig: aarch64-linux
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 0.16.0 is not an official ziglang.org release (it's a nightly), so
-      # pin to master. If master drifts past what the code targets, pin an
-      # exact nightly like 0.16.0-dev.NNNN+hash here instead.
-      - name: Install Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: master
+      # Download Zig 0.16.0 directly from ziglang.org (setup-zig's index does not
+      # list 0.16.0 and mis-routes it to the nightly path). libgit2 is built
+      # statically from source by `zig build`, so no system libgit2 is needed.
+      - name: Install Zig 0.16.0
+        run: |
+          ZIG="zig-${{ matrix.zig }}-0.16.0"
+          curl -fsSL "https://ziglang.org/download/0.16.0/${ZIG}.tar.xz" -o zig.tar.xz
+          tar xf zig.tar.xz
+          echo "$PWD/${ZIG}" >> "$GITHUB_PATH"
 
-      # libgit2 is statically built from source by `zig build`, so no system
-      # libgit2 is needed here.
       - name: Build
         run: zig build -Doptimize=ReleaseFast
 
