@@ -219,21 +219,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # If 0.16.0 is not yet available in setup-zig's version index, pin to the
-      # exact release tag or mirror URL the project uses instead of "0.16.0".
+      # 0.16.0 is not an official ziglang.org release (it's a nightly), so
+      # pin to master. If master drifts past what the code targets, pin an
+      # exact nightly like 0.16.0-dev.NNNN+hash here instead.
       - name: Install Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.16.0
+          version: master
 
-      - name: Install libgit2 (macOS)
-        if: matrix.os == 'macos'
-        run: brew install libgit2 pkg-config
-
-      - name: Install libgit2 (Linux)
-        if: matrix.os == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libgit2-dev pkg-config
-
+      # libgit2 is statically built from source by `zig build`, so no system
+      # libgit2 is needed here.
       - name: Build
         run: zig build -Doptimize=ReleaseFast
 
