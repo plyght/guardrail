@@ -19,7 +19,7 @@ const update = @import("update.zig");
 const Oid = oid.Oid;
 const Store = store.Store;
 
-const version = "0.1.1";
+const version = "0.1.2";
 
 const usage =
     \\gr — guardrail, a fast independent VCS built for humans and agents
