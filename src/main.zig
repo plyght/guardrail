@@ -19,7 +19,7 @@ const update = @import("update.zig");
 const Oid = oid.Oid;
 const Store = store.Store;
 
-const version = "0.0.0";
+const version = "0.1.0";
 
 const usage =
     \\gr — guardrail, a fast independent VCS built for humans and agents
@@ -798,18 +798,43 @@ fn targetBranch(io: std.Io, alloc: std.mem.Allocator, s: *Store, explicit: ?[]co
 fn cmdPush(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, rest: []const []const u8) !void {
     var s = (try openRepo(io, alloc, w)) orelse return;
     defer s.deinit();
-    const remote_name = if (rest.len >= 1) rest[0] else "origin";
+
+    // Positional args are remote then branch; -f/--force is a flag anywhere.
+    var force = false;
+    var pos: [2][]const u8 = undefined;
+    var np: usize = 0;
+    for (rest) |a| {
+        if (eq(a, "-f") or eq(a, "--force")) {
+            force = true;
+        } else if (np < 2) {
+            pos[np] = a;
+            np += 1;
+        }
+    }
+    const remote_name = if (np >= 1) pos[0] else "origin";
     const url = (try resolveRemote(io, alloc, &s, remote_name)) orelse {
         try w.print("unknown remote '{s}' — pass a URL, or set it in git or `gr config remote.{s}.url`\n", .{ remote_name, remote_name });
         return;
     };
     defer alloc.free(url);
-    const branch = try targetBranch(io, alloc, &s, if (rest.len >= 2) rest[1] else null);
+    const branch = try targetBranch(io, alloc, &s, if (np >= 2) pos[1] else null);
     defer alloc.free(branch);
-    git.pushRemote(&s, url, branch) catch {
-        try w.print("push to {s} failed (auth? set GITHUB_TOKEN, or check the URL)\n", .{remote_name});
-        return;
-    };
+
+    // If a git repo is colocated here, push IT directly (dual-write commits live
+    // there) so local .git and the remote stay identical. Otherwise synthesize a
+    // history in the mirror and push that.
+    const colocated = if (std.Io.Dir.cwd().access(io, ".git", .{})) |_| true else |_| false;
+    if (colocated) {
+        git.pushColocated(&s, ".", url, branch, force) catch {
+            try w.print("push to {s} failed (diverged? try `gr push --force`; or auth/URL)\n", .{remote_name});
+            return;
+        };
+    } else {
+        git.pushRemote(&s, url, branch) catch {
+            try w.print("push to {s} failed (auth? or check the URL)\n", .{remote_name});
+            return;
+        };
+    }
     try w.print("pushed {s} → {s} ({s})\n", .{ branch, remote_name, url });
 }
 

@@ -1108,6 +1108,41 @@ pub fn pushRemote(store: *Store, remote_url: []const u8, branch_opt: ?[]const u8
     try check(c.git_remote_push(remote, &strarr, &opts));
 }
 
+/// Push a COLOCATED git repo's branch directly to a remote. Used when a `.git`
+/// already exists next to `.gr`: dual-write commits live in that repo, so we
+/// push it as-is (keeping local `.git` and the remote identical) instead of
+/// synthesizing a divergent history in the mirror.
+pub fn pushColocated(store: *Store, work_dir_path: []const u8, remote_url: []const u8, branch: []const u8, force: bool) !void {
+    ensureInit();
+    const alloc = store.alloc;
+
+    const path_z = try alloc.dupeZ(u8, work_dir_path);
+    defer alloc.free(path_z);
+    var repo: ?*c.git_repository = null;
+    try check(c.git_repository_open(&repo, path_z.ptr));
+    defer c.git_repository_free(repo);
+
+    const url_z = try alloc.dupeZ(u8, remote_url);
+    defer alloc.free(url_z);
+    var remote: ?*c.git_remote = null;
+    try check(c.git_remote_create_anonymous(&remote, repo, url_z.ptr));
+    defer c.git_remote_free(remote);
+
+    resetCredCache();
+    g_cred.token = envToken();
+
+    const prefix = if (force) "+" else "";
+    const rs = try std.fmt.allocPrintSentinel(alloc, "{s}refs/heads/{s}:refs/heads/{s}", .{ prefix, branch, branch }, 0);
+    defer alloc.free(rs);
+    var rs_arr = [_][*c]u8{rs.ptr};
+    var strarr = c.git_strarray{ .strings = &rs_arr, .count = 1 };
+
+    var opts: c.git_push_options = undefined;
+    try check(c.git_push_options_init(&opts, c.GIT_PUSH_OPTIONS_VERSION));
+    opts.callbacks.credentials = credentialsCb;
+    try check(c.git_remote_push(remote, &strarr, &opts));
+}
+
 /// Pull from an actual git remote (https/ssh/file://) into guardrail. Fetches
 /// heads into the managed `.gr/gitmirror` repo, points its HEAD at the current
 /// branch, then imports that HEAD so the guardrail ref updates.
