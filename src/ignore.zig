@@ -29,6 +29,34 @@ pub const IgnoreList = struct {
         return loadFromText(alloc, text);
     }
 
+    /// Read `.gitignore` then `.grignore` from `dir` and merge them into one
+    /// list. `.gitignore` rules come first so `.grignore` rules, being later,
+    /// win on conflict (last matching rule decides). Either file may be absent.
+    pub fn loadMerged(alloc: std.mem.Allocator, dir: std.Io.Dir, io: std.Io) !IgnoreList {
+        var rules: std.ArrayList(Rule) = .empty;
+        errdefer {
+            for (rules.items) |r| alloc.free(r.pattern);
+            rules.deinit(alloc);
+        }
+        for ([_][]const u8{ ".gitignore", ".grignore" }) |name| {
+            const text = dir.readFileAlloc(io, name, alloc, .unlimited) catch continue;
+            defer alloc.free(text);
+            var parsed = try loadFromText(alloc, text);
+            defer parsed.deinit();
+            for (parsed.rules) |r| {
+                const pat = try alloc.dupe(u8, r.pattern);
+                errdefer alloc.free(pat);
+                try rules.append(alloc, .{
+                    .pattern = pat,
+                    .negated = r.negated,
+                    .anchored = r.anchored,
+                    .dir_only = r.dir_only,
+                });
+            }
+        }
+        return .{ .alloc = alloc, .rules = try rules.toOwnedSlice(alloc) };
+    }
+
     pub fn loadFromText(alloc: std.mem.Allocator, text: []const u8) !IgnoreList {
         var rules: std.ArrayList(Rule) = .empty;
         errdefer {
@@ -194,6 +222,30 @@ test "always ignore .gr and .git" {
     try testing.expect(list.isIgnored(".git", true));
     try testing.expect(list.isIgnored("a/.git", true));
     try testing.expect(!list.isIgnored("normal.txt", false));
+}
+
+test "loadMerged reads gitignore and grignore, grignore wins" {
+    const io = std.testing.io;
+    const alloc = testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = ".gitignore", .data = "*.log\nbuild/\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = ".grignore", .data = "!keep.log\n" });
+    var list = try IgnoreList.loadMerged(alloc, tmp.dir, io);
+    defer list.deinit();
+    try testing.expect(list.isIgnored("a.log", false)); // from .gitignore
+    try testing.expect(list.isIgnored("build", true)); // from .gitignore
+    try testing.expect(!list.isIgnored("keep.log", false)); // .grignore re-includes
+}
+
+test "loadMerged with neither file yields empty list" {
+    const io = std.testing.io;
+    const alloc = testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var list = try IgnoreList.loadMerged(alloc, tmp.dir, io);
+    defer list.deinit();
+    try testing.expectEqual(@as(usize, 0), list.rules.len);
 }
 
 test "absent file yields empty list" {

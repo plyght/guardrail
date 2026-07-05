@@ -9,7 +9,7 @@ fn scan(store: *Store, work_dir: std.Io.Dir) ![]object.TreeEntry {
     const io = store.io;
     const alloc = store.alloc;
 
-    var ignores = try ignore.IgnoreList.load(alloc, work_dir, io);
+    var ignores = try ignore.IgnoreList.loadMerged(alloc, work_dir, io);
     defer ignores.deinit();
 
     var entries: std.ArrayList(object.TreeEntry) = .empty;
