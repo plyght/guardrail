@@ -73,3 +73,7 @@ zig build test     # run the test suite
 ```
 
 Status: early, opinionated, and moving fast.
+
+## Releases
+
+Prebuilt `gr` binaries are published to GitHub Releases for each platform (macOS arm64/x64, Linux x64/arm64); they dynamically link libgit2, so you need `libgit2` installed to run them.

@@ -14,6 +14,7 @@ const watch = @import("watch.zig");
 const net = @import("net.zig");
 const ignore = @import("ignore.zig");
 const provenance = @import("provenance.zig");
+const update = @import("update.zig");
 
 const Oid = oid.Oid;
 const Store = store.Store;
@@ -60,6 +61,7 @@ const usage =
     \\
     \\  init            create a guardrail repo here
     \\  config [--global] <key> [value]   get/set config (identity, defaults)
+    \\  update          update gr to the latest release
     \\  version | help
     \\
 ;
@@ -92,6 +94,8 @@ pub fn main(init: std.process.Init) !void {
 
     if (eq(cmd, "version") or eq(cmd, "--version")) {
         try w.print("gr {s}\n", .{version});
+    } else if (eq(cmd, "update") or eq(cmd, "upgrade")) {
+        try update.run(io, alloc, w, version);
     } else if (eq(cmd, "help") or eq(cmd, "-h") or eq(cmd, "--help")) {
         try w.writeAll(usage);
     } else if (eq(cmd, "init")) {
@@ -864,4 +868,5 @@ test {
     _ = net;
     _ = ignore;
     _ = provenance;
+    _ = update;
 }
