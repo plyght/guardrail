@@ -101,14 +101,21 @@ fn findAssetUrl(assets: std.json.Array, name: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn run(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, current_version: []const u8) !void {
+pub fn run(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, current_version: []const u8, nightly: bool) !void {
     const asset = assetName() orelse {
         try w.writeAll("gr update: unsupported platform (no prebuilt release for this OS/arch)\n");
         return;
     };
 
-    const api_url = "https://api.github.com/repos/plyght/guardrail/releases/latest";
+    const api_url = if (nightly)
+        "https://api.github.com/repos/plyght/guardrail/releases/tags/nightly"
+    else
+        "https://api.github.com/repos/plyght/guardrail/releases/latest";
     const body = curlCapture(io, alloc, api_url, true) catch {
+        if (nightly) {
+            try w.writeAll("no nightly build available yet\n");
+            return;
+        }
         try w.writeAll("gr update: could not reach GitHub (network? curl available?)\n");
         return;
     };
@@ -132,6 +139,10 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, current_vers
     const tag = switch (root.get("tag_name") orelse .null) {
         .string => |s| s,
         else => {
+            if (nightly) {
+                try w.writeAll("no nightly build available yet\n");
+                return;
+            }
             try w.writeAll("gr update: release has no tag_name\n");
             return;
         },
@@ -144,10 +155,18 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, current_vers
         },
     };
 
-    if (isUpToDate(current_version, tag)) {
+    if (!nightly and isUpToDate(current_version, tag)) {
         try w.print("gr is already up to date ({s})\n", .{tag});
         return;
     }
+
+    const label = if (nightly) blk: {
+        const published = switch (root.get("published_at") orelse .null) {
+            .string => |s| s,
+            else => tag,
+        };
+        break :blk published;
+    } else tag;
 
     const bin_url = findAssetUrl(assets, asset) orelse {
         try w.print("gr update: no asset '{s}' in release {s}\n", .{ asset, tag });
@@ -212,7 +231,11 @@ pub fn run(io: std.Io, alloc: std.mem.Allocator, w: *std.Io.Writer, current_vers
         return;
     }
 
-    try w.print("updated gr to {s}\n", .{tag});
+    if (nightly) {
+        try w.print("updated gr to nightly ({s})\n", .{label});
+    } else {
+        try w.print("updated gr to {s}\n", .{label});
+    }
 }
 
 test "assetName matches current build target" {

@@ -61,7 +61,7 @@ const usage =
     \\
     \\  init            create a guardrail repo here
     \\  config [--global] <key> [value]   get/set config (identity, defaults)
-    \\  update          update gr to the latest release
+    \\  update [--nightly]   update gr to the latest release (or nightly build)
     \\  version | help
     \\
 ;
@@ -95,7 +95,11 @@ pub fn main(init: std.process.Init) !void {
     if (eq(cmd, "version") or eq(cmd, "--version")) {
         try w.print("gr {s}\n", .{version});
     } else if (eq(cmd, "update") or eq(cmd, "upgrade")) {
-        try update.run(io, alloc, w, version);
+        var nightly = false;
+        for (rest) |a| {
+            if (eq(a, "--nightly")) nightly = true;
+        }
+        try update.run(io, alloc, w, version, nightly);
     } else if (eq(cmd, "help") or eq(cmd, "-h") or eq(cmd, "--help")) {
         try w.writeAll(usage);
     } else if (eq(cmd, "init")) {
