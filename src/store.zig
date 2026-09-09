@@ -129,7 +129,10 @@ pub const Store = struct {
     /// just-completed rename put there.
     fn syncDir(self: *Store, sub_path: []const u8, barrier: Barrier) !void {
         if (self.durability == .fast) return;
-        var dir = try self.root.openDir(self.io, sub_path, .{});
+        // Zig opens a non-iterable directory with O_PATH on Linux. Such a
+        // descriptor is valid for *at operations but fsync rejects it with EBADF.
+        // Request iteration so this is a real read-only directory descriptor.
+        var dir = try self.root.openDir(self.io, sub_path, .{ .iterate = true });
         defer dir.close(self.io);
         try syncFile(self.io, .{ .handle = dir.handle, .flags = .{ .nonblocking = false } }, barrier);
     }
@@ -357,6 +360,19 @@ const testing = std.testing;
 
 fn tmpStore(io: std.Io, alloc: std.mem.Allocator, td: *std.Io.Dir) !Store {
     return Store.init(io, alloc, td.*);
+}
+
+test "strict durability syncs the directory that publishes an object" {
+    const io = std.testing.io;
+    const alloc = testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var store = try Store.init(io, alloc, tmp.dir);
+    defer store.deinit();
+    store.durability = .strict;
+
+    try store.syncDir("objects", .ordered);
 }
 
 test "raw write is content-addressed and idempotent" {

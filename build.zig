@@ -34,7 +34,19 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "version", zon.version);
     exe_mod.addOptions("build_options", build_options);
 
-    const exe = b.addExecutable(.{ .name = "sdt", .root_module = exe_mod });
+    // Release packaging passes -Dstatic=true for Linux/musl. Keep this an
+    // explicit build property instead of relying on Zig's target-dependent
+    // default executable linkage.
+    const static_executable = b.option(
+        bool,
+        "static",
+        "Statically link the executable (used by Linux/musl release builds)",
+    ) orelse false;
+    const exe = b.addExecutable(.{
+        .name = "sdt",
+        .root_module = exe_mod,
+        .linkage = if (static_executable) .static else null,
+    });
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

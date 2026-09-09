@@ -63,16 +63,28 @@ jobs:
         include:
           - runner: macos-latest
             asset: sdt-macos-arm64
+            os: macos
             zig: aarch64-macos
+            target: aarch64-macos
+            static: false
           - runner: macos-13
             asset: sdt-macos-x64
+            os: macos
             zig: x86_64-macos
+            target: x86_64-macos
+            static: false
           - runner: ubuntu-latest
             asset: sdt-linux-x64
+            os: linux
             zig: x86_64-linux
+            target: x86_64-linux-musl
+            static: true
           - runner: ubuntu-24.04-arm
             asset: sdt-linux-arm64
+            os: linux
             zig: aarch64-linux
+            target: aarch64-linux-musl
+            static: true
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -85,8 +97,33 @@ jobs:
           tar xf zig.tar.xz
           echo "$PWD/${ZIG}" >> "$GITHUB_PATH"
 
-      - name: Build
-        run: zig build
+      - name: Build portable release binary
+        run: zig build -Dtarget=${{ matrix.target }} -Dcpu=baseline -Dstatic=${{ matrix.static }}
+
+      - name: Verify Linux binary is static
+        if: matrix.os == 'linux'
+        run: |
+          set -euo pipefail
+          file zig-out/bin/sdt
+          if readelf -l zig-out/bin/sdt | grep -q 'INTERP'; then
+            echo 'Linux nightly has a dynamic program interpreter' >&2
+            exit 1
+          fi
+          if readelf -d zig-out/bin/sdt 2>/dev/null | grep -q 'NEEDED'; then
+            echo 'Linux nightly has a dynamic library dependency' >&2
+            exit 1
+          fi
+          zig-out/bin/sdt --version
+
+      - name: Smoke-test HTTPS clone
+        if: matrix.os == 'linux'
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT
+          zig-out/bin/sdt clone https://github.com/octocat/Hello-World.git "$smoke_dir/hello"
+          test -d "$smoke_dir/hello/.git"
+          test -f "$smoke_dir/hello/README"
 
       - name: Package binary
         env:

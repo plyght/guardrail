@@ -54,16 +54,18 @@ fn allowsCredentials(remote: []const u8) bool {
     return !std.ascii.startsWithIgnoreCase(remote, "http://");
 }
 
+const Authentication = enum { anonymous, configured };
+
 const Session = struct {
     allocator: std.mem.Allocator,
     client: apricot.git_http.Client,
     owned_token: ?[]u8,
     helper: ?proc.Cred,
 
-    fn init(allocator: std.mem.Allocator, io: std.Io, remote: []const u8) Session {
+    fn init(allocator: std.mem.Allocator, io: std.Io, remote: []const u8, authentication: Authentication) Session {
         var owned_token: ?[]u8 = null;
         var helper: ?proc.Cred = null;
-        const credentials: ?apricot.http_client.Credentials = if (!allowsCredentials(remote))
+        const credentials: ?apricot.http_client.Credentials = if (authentication == .anonymous or !allowsCredentials(remote))
             null
         else if (proc.envToken()) |token| .{
             .username = "apricot",
@@ -121,7 +123,7 @@ pub fn publish(
 ) !Published {
     var captured = try apricot.sdt_codec.capture(allocator, io, repository_path, remote);
     defer captured.deinit(allocator);
-    var session = Session.init(allocator, io, remote);
+    var session = Session.init(allocator, io, remote, .configured);
     defer session.deinit();
     return apricot.git_forge.publish(
         allocator,
@@ -137,17 +139,34 @@ pub fn publish(
 }
 
 pub fn fetch(allocator: std.mem.Allocator, io: std.Io, remote: []const u8, branch: []const u8) !Fetched {
-    var session = Session.init(allocator, io, remote);
+    var session = Session.init(allocator, io, remote, .configured);
     defer session.deinit();
     return apricot.git_forge.fetch(allocator, session.smart(allocator, remote), branch);
 }
 
-pub fn fetchDefault(allocator: std.mem.Allocator, io: std.Io, remote: []const u8) !Fetched {
-    var session = Session.init(allocator, io, remote);
-    defer session.deinit();
+fn fetchDefaultWithSession(allocator: std.mem.Allocator, remote: []const u8, session: *Session) !Fetched {
     const branch = try apricot.git_forge.defaultBranch(allocator, session.smart(allocator, remote));
     defer allocator.free(branch);
     return apricot.git_forge.fetch(allocator, session.smart(allocator, remote), branch);
+}
+
+pub fn fetchDefault(allocator: std.mem.Allocator, io: std.Io, remote: []const u8) !Fetched {
+    // A clone of a public repository must not consult a credential helper or
+    // attach stale credentials. GitHub rejects an otherwise public request
+    // when it carries invalid Basic authentication. Probe anonymously first;
+    // private repositories get one configured-credential retry after an auth
+    // challenge or the concealed 404 that GitHub uses for private repositories.
+    var anonymous = Session.init(allocator, io, remote, .anonymous);
+    defer anonymous.deinit();
+    return fetchDefaultWithSession(allocator, remote, &anonymous) catch |err| {
+        // GitHub conceals private repositories as 404, so a configured retry is
+        // also required for RepositoryNotFound. A real missing repository costs
+        // one credential lookup because those cases are indistinguishable.
+        if (err != error.AuthenticationRequired and err != error.RepositoryNotFound) return err;
+        var authenticated = Session.init(allocator, io, remote, .configured);
+        defer authenticated.deinit();
+        return fetchDefaultWithSession(allocator, remote, &authenticated);
+    };
 }
 
 pub fn restore(
@@ -197,6 +216,14 @@ test "credentials are withheld from a cleartext remote" {
     try std.testing.expect(allowsCredentials("HTTPS://github.com/x/y"));
     try std.testing.expect(!allowsCredentials("http://192.168.1.9/x/y"));
     try std.testing.expect(!allowsCredentials("HTTP://192.168.1.9/x/y"));
+}
+
+test "native clone probe starts anonymous" {
+    var session = Session.init(std.testing.allocator, std.testing.io, "https://github.com/octocat/Hello-World.git", .anonymous);
+    defer session.deinit();
+    try std.testing.expect(session.client.credentials == null);
+    try std.testing.expect(session.owned_token == null);
+    try std.testing.expect(session.helper == null);
 }
 
 test "bridge exposes embedded Apricot transport" {

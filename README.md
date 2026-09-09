@@ -354,17 +354,30 @@ sdt update             # latest stable
 sdt update --nightly   # latest nightly build
 ```
 
-Binaries are statically linked, so no system libgit2 is required.
+Linux release binaries target musl and are fully static. They run without a
+system libc or libgit2. macOS release binaries bundle libgit2, but still use the
+system libraries provided by macOS. All release builds use Zig's baseline CPU
+rather than instructions specific to the CI runner.
 
 ## Build from source
 
 Requires Zig 0.16.
 
 ```
-zig build                       # produces zig-out/bin/sdt, ReleaseFast
+zig build                       # native zig-out/bin/sdt, ReleaseFast
 zig build test
 zig build -Doptimize=Debug      # slow binary, every safety check on
 ```
+
+To reproduce the portable x86-64 Linux release build:
+
+```
+zig build -Dtarget=x86_64-linux-musl -Dcpu=baseline -Dstatic=true
+```
+
+Use `aarch64-linux-musl` for the arm64 Linux artifact. The macOS release targets
+are `x86_64-macos` and `aarch64-macos`; they also use `-Dcpu=baseline`, without
+`-Dstatic=true`.
 
 ## Status
 
