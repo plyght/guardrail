@@ -65,26 +65,22 @@ jobs:
             asset: sdt-macos-arm64
             os: macos
             zig: aarch64-macos
-            target: aarch64-macos
-            static: false
+            build_args: -Dcpu=baseline
           - runner: macos-13
             asset: sdt-macos-x64
             os: macos
             zig: x86_64-macos
-            target: x86_64-macos
-            static: false
+            build_args: -Dcpu=baseline
           - runner: ubuntu-latest
             asset: sdt-linux-x64
             os: linux
             zig: x86_64-linux
-            target: x86_64-linux-musl
-            static: true
+            build_args: -Dtarget=x86_64-linux-musl -Dcpu=baseline -Dstatic=true
           - runner: ubuntu-24.04-arm
             asset: sdt-linux-arm64
             os: linux
             zig: aarch64-linux
-            target: aarch64-linux-musl
-            static: true
+            build_args: -Dtarget=aarch64-linux-musl -Dcpu=baseline -Dstatic=true
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -98,7 +94,7 @@ jobs:
           echo "$PWD/${ZIG}" >> "$GITHUB_PATH"
 
       - name: Build portable release binary
-        run: zig build -Dtarget=${{ matrix.target }} -Dcpu=baseline -Dstatic=${{ matrix.static }}
+        run: zig build ${{ matrix.build_args }}
 
       - name: Verify Linux binary is static
         if: matrix.os == 'linux'
