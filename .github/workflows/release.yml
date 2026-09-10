@@ -199,7 +199,7 @@ jobs:
             os: macos
             zig: aarch64-macos
             build_args: -Dcpu=baseline
-          - runner: macos-13
+          - runner: macos-15-intel
             asset: sdt-macos-x64
             os: macos
             zig: x86_64-macos
